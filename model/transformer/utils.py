@@ -46,7 +46,7 @@ class ScaledDotProductAttention(nn.Module):
 
 # MultiHeadAttention class for processing different parts of input embedded matrix
 class MultiHeadAttention(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, masked=False):
         super().__init__()
 
         self.num_heads = config.num_heads
@@ -57,9 +57,13 @@ class MultiHeadAttention(nn.Module):
         self.query_params = nn.Linear(self.d_model, self.d_model)
         self.key_params = nn.Linear(self.d_model, self.d_model)
         self.value_params = nn.Linear(self.d_model, self.d_model)
+
         # dims has to be divisible by num_heads
-        self.scaled_dot_product_attention = ScaledDotProductAttention(self.d_model/self.num_heads, config.max_seq_length)
+        self.scaled_dot_product_attention = ScaledDotProductAttention(self.d_model/self.num_heads, config.max_seq_length, masked)
         self.output_linear_params = nn.Linear(self.d_model, self.d_model)
+
+        # value referenced from Justin's implementation
+        self.dropout = nn.Dropout(config.dropout_val)
 
     def forward(self, x):
         seq_length = x.shape[1]
@@ -75,41 +79,9 @@ class MultiHeadAttention(nn.Module):
 
         attention_weighted_output = self.scaled_dot_product_attention((transposed_queries, transposed_keys, transposed_values)).reshape((self.batch_size, seq_length, self.d_model))
 
-        return self.output_linear_params(attention_weighted_output)
+        head_output = self.output_linear_params(attention_weighted_output)
 
-
-# MaskedMultiHeadAttention class for processing different parts of input embedded matrix
-class MaskedMultiHeadAttention(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-
-        self.num_heads = config.num_heads
-        self.d_model = config.d_model
-        self.d_keys = self.d_model//self.num_heads
-        self.batch_size = config.batch_size
-
-        self.query_params = nn.Linear(self.d_model, self.d_model)
-        self.key_params = nn.Linear(self.d_model, self.d_model)
-        self.value_params = nn.Linear(self.d_model, self.d_model)
-        # dims has to be divisible by num_heads
-        self.scaled_dot_product_attention = ScaledDotProductAttention(self.d_model/self.num_heads, config.max_seq_length, masked=True)
-        self.output_linear_params = nn.Linear(self.d_model, self.d_model)
-
-    def forward(self, x):
-        seq_length = x.shape[1]
-
-        projected_queries = self.query_params(x).reshape((self.batch_size, seq_length, self.num_heads, self.d_keys))
-        projected_keys = self.key_params(x).reshape((self.batch_size, seq_length, self.num_heads, self.d_keys))
-        projected_values = self.value_params(x).reshape((self.batch_size, seq_length, self.num_heads, self.d_keys))
-
-        # changing dims to be (batch_size, num_heads, sequence_length, d_keys)
-        transposed_queries = torch.transpose(projected_queries, -2, -3)
-        transposed_keys = torch.transpose(projected_keys, -2, -3)
-        transposed_values = torch.transpose(projected_values, -2, -3)
-
-        attention_weighted_output = self.scaled_dot_product_attention((transposed_queries, transposed_keys, transposed_values)).reshape((self.batch_size, seq_length, self.d_model))
-
-        return self.output_linear_params(attention_weighted_output)
+        return self.dropout(head_output)
 
 
 # FeedForward class for MLP component after attention computations
@@ -159,7 +131,7 @@ class DecoderBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.masked_multi_head_attention = MaskedMultiHeadAttention(config)
+        self.masked_multi_head_attention = MultiHeadAttention(config, masked=True)
         self.multi_head_attention = MultiHeadAttention(config)
 
         self.layer_norm = nn.LayerNorm(config.d_model)
@@ -184,24 +156,44 @@ class Transformer(nn.Module):
     def __init__(self, config):
         super().__init__()
         
-        # TODO need positional encoding
 
         self.embedding = nn.Embedding(config.vocab_size, config.d_model)
+        # initialize trainable params to matrix of zeros
+        self.positional_encodings = nn.Parameter(torch.zeros(1, config.n_positions, config.d_model))
 
-        self.decoder_block1 = DecoderBlock(config)
-        self.decoder_block2 = DecoderBlock(config)
+        # value referenced from Justin's implementation
+        self.encoding_dropout = nn.Dropout(config.dropout_val)
 
-        self.unembedding_matrix = nn.Linear(config.d_model, config.d_model)
+        self.decoder_blocks = []
+        for i in range(config.num_blocks):
+            self.decoder_blocks += [DecoderBlock(config)]
 
-        self.softmax = nn.Softmax(dim=0)
+        self.unembedding_matrix = nn.Linear(config.d_model, config.vocab_size, bias=False)
+
+        self.softmax = nn.Softmax(dim=-1)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if hasattr(module, 'bias') and module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
 
     def forward(self, x):
         # dims[0] = batch size, dims[1] = embedding size = d_model, dims[2] = number of tokens
         embedded_input = self.embedding(x)
+        positional_encodings = self.positional_encodings[:, :x.shape[1], :]
 
-        decoder_output1 = self.decoder_block1(embedded_input)
-        decoder_output2 = self.decoder_block2(decoder_output1)
+        encoded_input = self.encoding_dropout(embedded_input + positional_encodings)
 
-        unembedded_output = self.unembedding_matrix(decoder_output2)
+        decoder_output = self.decoder_blocks[0](encoded_input)
+        for i in range(1, len(self.decoder_blocks)):
+            decoder_output = self.decoder_blocks[i](decoder_output)
+
+        unembedded_output = self.unembedding_matrix(decoder_output)
 
         return self.softmax(unembedded_output)
