@@ -155,11 +155,10 @@ class DecoderBlock(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, config):
         super().__init__()
-        
 
         self.embedding = nn.Embedding(config.vocab_size, config.d_model)
         # initialize trainable params to matrix of zeros
-        self.positional_encodings = nn.Parameter(torch.zeros(1, config.n_positions, config.d_model))
+        self.positional_encodings = nn.Parameter(torch.zeros(1, config.max_seq_length, config.d_model))
 
         # value referenced from Justin's implementation
         self.encoding_dropout = nn.Dropout(config.dropout_val)
@@ -172,7 +171,7 @@ class Transformer(nn.Module):
 
         self.softmax = nn.Softmax(dim=-1)
 
-        self.apply(self._init_weights)
+        '''self.apply(self._init_weights)
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -181,7 +180,7 @@ class Transformer(nn.Module):
                 nn.init.zeros_(module.bias)
         elif isinstance(module, nn.LayerNorm):
             nn.init.ones_(module.weight)
-            nn.init.zeros_(module.bias)
+            nn.init.zeros_(module.bias)'''
 
     def forward(self, x):
         # dims[0] = batch size, dims[1] = embedding size = d_model, dims[2] = number of tokens

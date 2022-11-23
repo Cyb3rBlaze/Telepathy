@@ -6,10 +6,12 @@ from utils import Transformer
 from config import Config
 
 
-# tests - pulled from Justin's repo
+
+# transformer test function
 def overfit_example_input(vocab, input, n_steps=200, print_loss=False):
     config = Config()
     model = Transformer(config)
+
     # not using AdamW because the current model doesn't support weight decay for simplicity
     # (would have to exclude layernorm and embedding parameters)
     optimizer = optim.Adam(model.parameters())
@@ -23,6 +25,7 @@ def overfit_example_input(vocab, input, n_steps=200, print_loss=False):
         print(vocab[idx.item()])
 
     model.train()
+
     for _ in range(n_steps):
         logits = model(input)
 
